@@ -133,7 +133,10 @@ ctx.get('mcpManager').register(config.mcpServerName, {
 4. **超时预算**：召回在 `pre-step` 关键路径上，默认 8s（实测本机到网关的 AI Search
    首字节约 5s，原 2s 会稳定超时）；自动捕获默认 10s（后台 fire-and-forget）；
    普通 REST 8s；MCP 工具调用 15s（与注册的 `toolCallTimeoutMs` 一致）。
-   两项都可通过 `recallTimeoutMs` / `captureTimeoutMs` 调整。
+   两项都可通过 `recallTimeoutMs` / `captureTimeoutMs` 调整。走 HTTP 代理时
+   AI Search 首字节可能到 10s 以上，profile 里把 `recallTimeoutMs` 调到 15000。
+5. **代理**：Node/Electron 的 `fetch` 不自动读系统代理；配置 `proxyUrl` 后通过
+   `undici` 的 `ProxyAgent` 作为 dispatcher，适用于只能经本地代理访问网关的网络。
 5. **上下文供给**：不修改 `decision.messages`；插件注册
    `systemPrompt.context({ name: 'smriti-memory' })`，Host 在每步装配时生成
    runtime-context 快照（`source.kind: 'runtime-context'`、`form: 'snapshot'`、

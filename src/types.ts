@@ -38,6 +38,8 @@ export interface PluginConfig {
   accessClientId?: string
   /** Access service token 的 client secret；与 client id 成对出现。 */
   accessClientSecret?: string
+  /** 可选 HTTP 代理（如 http://127.0.0.1:7890）；Node fetch 不自动读系统代理。 */
+  proxyUrl?: string
   /** 是否用 mcpManager 再注册一份 memory_* 工具；已有同名 MCP 服务器时设为 false。 */
   exposeMcp?: boolean
 }
@@ -96,6 +98,9 @@ export interface TopicSummary {
   label?: string
   description?: string
   count?: number
+  parent?: string | null
+  depth?: number
+  directCount?: number
 }
 
 /** `POST /v1/extract` 的一条消息。 */

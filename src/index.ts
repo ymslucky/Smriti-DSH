@@ -69,6 +69,7 @@ export function apply(ctx: CordisContextLike, rawConfig?: unknown): void {
     captureDailyLimit: config.captureDailyLimit,
     captureMinConfidence: config.captureMinConfidence,
     captureMode: config.captureMode ?? 'heuristic',
+    proxyUrl: config.proxyUrl ?? '',
     recallTimeoutMs: config.recallTimeoutMs,
     captureTimeoutMs: config.captureTimeoutMs,
     exposeMcp: config.exposeMcp ?? true,
@@ -99,6 +100,7 @@ export function apply(ctx: CordisContextLike, rawConfig?: unknown): void {
   })
 
   const client = new GatewayClient(ctx, config)
+  if (typeof ctx.effect === 'function') ctx.effect(() => () => client.close())
 
   // 捕获需要“本回合最后一条 user 文本”，这份记录由召回监听器顺带维护。
   const runtime = config.autoRecall || config.autoCapture

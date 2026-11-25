@@ -73,6 +73,7 @@ npx -p @deepseek-ai/dsh dsh plugin --profile <profile> add <本仓库绝对路�
 | `captureTimeoutMs` | `10000` | 自动捕获超时（后台请求） |
 | `accessClientId` | 空 | Access service token 的 client id；配置后优先于 credentials/env |
 | `accessClientSecret` | 空 | Access service token 的 client secret |
+| `proxyUrl` | 空 | 可选 HTTP 代理（如 `http://127.0.0.1:7890`）；Node fetch 不会自动使用系统代理 |
 | `exposeMcp` | `true` | 是否再注册一份 `memory_*` MCP；已有同名 MCP 服务器时设为 `false` |
 
 `gatewayUrl` 显式留空会让插件告警并停用，不会静默打到占位域名。

@@ -15,6 +15,7 @@
  * JSON-RPC（Streamable HTTP）实现。
  */
 
+import { ProxyAgent } from 'undici'
 import type {
   CordisContextLike,
   CredentialsLike,
@@ -133,10 +134,11 @@ export class GatewayClient {
   private readonly base: string
   private readonly ctx: CordisContextLike
   private readonly config: Pick<PluginConfig, 'accessClientId' | 'accessClientSecret'>
+  private dispatcher: ProxyAgent | undefined
 
   constructor(
     ctx: CordisContextLike,
-    config: Pick<PluginConfig, 'gatewayUrl' | 'accessClientId' | 'accessClientSecret'>,
+    config: Pick<PluginConfig, 'gatewayUrl' | 'accessClientId' | 'accessClientSecret' | 'proxyUrl'>,
   ) {
     this.ctx = ctx
     this.base = config.gatewayUrl
@@ -144,6 +146,25 @@ export class GatewayClient {
       accessClientId: config.accessClientId,
       accessClientSecret: config.accessClientSecret,
     }
+    if (config.proxyUrl !== undefined && config.proxyUrl.length > 0) {
+      try {
+        this.dispatcher = new ProxyAgent(config.proxyUrl)
+      } catch (error: unknown) {
+        this.dispatcher = undefined
+        ctx.logger.warn(`[smriti] proxyUrl 无效，回退直连：${String(error)}`)
+      }
+    }
+  }
+
+  /** 关闭代理 dispatcher（插件卸载时调用）。 */
+  close(): void {
+    void this.dispatcher?.close().catch(() => {})
+  }
+
+  /** 给 fetch 附加代理 dispatcher（Node fetch 不自动读系统代理）。 */
+  private withProxy(init: RequestInit): RequestInit {
+    if (this.dispatcher === undefined) return init
+    return { ...init, dispatcher: this.dispatcher } as RequestInit
   }
 
   /** 网关基址。 */
@@ -215,12 +236,12 @@ export class GatewayClient {
     const signal = AbortSignal.timeout(Math.max(1, timeoutMs))
     let response: Response
     try {
-      response = await fetch(`${this.base}${path}`, {
+      response = await fetch(`${this.base}${path}`, this.withProxy({
         method,
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
         signal,
-      })
+      }))
     } catch (error: unknown) {
       const reason = error instanceof Error ? error.message : String(error)
       throw new GatewayError(`Smriti 请求失败：${method} ${path}：${reason}`, undefined, { cause: error })
@@ -351,12 +372,12 @@ export class GatewayClient {
 
     const post = async (payload: Record<string, unknown>): Promise<Response> => {
       try {
-        return await fetch(endpoint, {
+        return await fetch(endpoint, this.withProxy({
           method: 'POST',
           headers: sessionId === undefined ? headers : { ...headers, 'mcp-session-id': sessionId },
           body: JSON.stringify(payload),
           signal,
-        })
+        }))
       } catch (error: unknown) {
         const reason = error instanceof Error ? error.message : String(error)
         throw new GatewayError(`Smriti MCP 请求失败：${reason}`, undefined, { cause: error })

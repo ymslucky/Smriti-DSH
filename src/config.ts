@@ -43,6 +43,7 @@ export const DEFAULT_CONFIG: PluginConfig = {
   captureTimeoutMs: 10000,
   accessClientId: '',
   accessClientSecret: '',
+  proxyUrl: '',
   exposeMcp: true,
 }
 
@@ -111,6 +112,7 @@ export function resolveConfig(raw: unknown): PluginConfig {
     captureTimeoutMs: asInteger(source.captureTimeoutMs, DEFAULT_CONFIG.captureTimeoutMs, 500, 30000),
     accessClientId: asString(source.accessClientId, ''),
     accessClientSecret: asString(source.accessClientSecret, ''),
+    proxyUrl: asString(source.proxyUrl, ''),
     exposeMcp: asBoolean(source.exposeMcp, true),
   }
 }
