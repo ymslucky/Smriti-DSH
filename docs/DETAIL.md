@@ -181,7 +181,7 @@ client.js         Client 半：标题栏「记忆」按钮 + 浮层（零构建�
 ## 7. Client 半与只读路由
 
 - Client 模块以 `window.__ModuleLoader__.load({ id:'smriti-dsh', factory })` 注册，`package.json.dsh.client` 声明 `platform: 'web'`、`immediately: true`、`inject` 会话 UI 包；无需打包器。
-- 按钮注册在 `conversation.session.header.actions`（session 作用域，标准 props 带 `sessionId`）；浮层用 `position: fixed`，有 `react-dom` 时用 `createPortal`，避免被标题栏 `overflow` 裁剪。
+- 按钮注册在 `conversation.session.header.actions`（session 作用域，标准 props 带 `sessionId`）；面板用原生 `<dialog>.showModal()` 的 top layer，避免标题栏 `overflow` 裁剪，也不依赖 `react-dom`。
 - 数据来自 Host 的只读 `GET /plugins/smriti/context?session=…`：返回 `{session, context}`，其中 `context` 是 `runtime.lastContext(sessionId)`，不返回 Access token 或其他凭据；路由 `cache-control: no-store`，只允许同源/无 Sec-Fetch-Site 的请求，非 owner peer 返回 403。
 - 客户端模块图在页面加载时注入，所以首次安装或更新 `client.js` 后要刷新 Web GUI；`pnpm run dev:web` 同时运行时才走 HMR。
 

@@ -45,11 +45,12 @@ npx -p @deepseek-ai/dsh dsh plugin --profile <profile> add <本仓库绝对路�
 
 ## 记忆面板（Client 半）
 
+- 面板用原生 `<dialog>.showModal()` 的 top layer，避免标题栏 `overflow` 裁剪；不依赖 `react-dom` portal。
 - 首次安装或更新 `client.js` 后需要**刷新一次 Web GUI**：客户端模块图在页面加载时注入，热更新只在 `pnpm run dev:web` 同时运行时生效。
 - 按钮位于会话标题右侧（`conversation.session.header.actions`），点击后请求
   `GET /plugins/smriti/context?session=<sessionId>`，显示当前会话最近一次召回全文。
 - Host 路由只返回 `{ session, context }`，不返回凭据；`context` 为空时面板显示“当前会话还没有召回记忆”。
-- 标题栏浮层被裁剪时用 `position: fixed`；有 `react-dom` 时走 portal。
+- 标题栏浮层被裁剪时用原生 `<dialog>` 的 top layer，不依赖 `react-dom`。
 
 ## 配置
 

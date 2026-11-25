@@ -1,17 +1,17 @@
 /**
- * Smriti-DSH 的 Client 半：在会话标题旁放一个「记忆」按钮，点开浮层展示
- * 当前会话最近一次注入的 `<memory_context>`。只读，不写入、不碰 DOM。
+ * Smriti-DSH 的 Client 半：在会话标题旁放一个「记忆」按钮，点开原生 <dialog>
+ * 展示当前会话最近一次注入的 `<memory_context>`。只读，不写入、不读其他插件 DOM。
  *
- * 数据来自 Host 的只读路由 `GET /plugins/smriti/context?session=…`；没有
- * 客户端构建步骤（DSH 的模块表只要求 window.__ModuleLoader__.load 工厂）。
+ * 用原生 dialog + showModal 而不是 React 浮层：标题栏有 overflow 裁剪，
+ * dialog 的 top layer 不受影响，也不需要依赖 react-dom 的 createPortal。
+ *
+ * 数据来自 Host 的只读路由 `GET /plugins/smriti/context?session=…`。
  */
 window.__ModuleLoader__.load({
   id: 'smriti-dsh',
   factory(require) {
     const React = require('react');
     const h = React.createElement;
-    let ReactDOM;
-    try { ReactDOM = require('react-dom'); } catch { ReactDOM = undefined; }
 
     const buttonStyle = {
       display: 'inline-flex',
@@ -27,40 +27,6 @@ window.__ModuleLoader__.load({
       fontSize: '12px',
       cursor: 'pointer',
     };
-    const overlayStyle = {
-      position: 'fixed',
-      inset: '0',
-      zIndex: 1000,
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      padding: '24px',
-      background: 'rgba(0, 0, 0, 0.32)',
-    };
-    const panelStyle = {
-      width: 'min(720px, 100%)',
-      maxHeight: '72vh',
-      display: 'flex',
-      flexDirection: 'column',
-      gap: '12px',
-      padding: '16px',
-      border: '1px solid var(--dsw-alias-border-l1)',
-      borderRadius: '10px',
-      background: 'var(--dsw-alias-bg-overlay)',
-      color: 'var(--dsw-alias-label-primary)',
-      boxShadow: '0 12px 40px rgba(0, 0, 0, 0.24)',
-    };
-    const headerStyle = {
-      display: 'flex',
-      alignItems: 'center',
-      gap: '8px',
-      fontSize: '13px',
-    };
-    const hintStyle = {
-      flex: '1',
-      color: 'var(--dsw-alias-label-secondary)',
-      fontSize: '12px',
-    };
     const smallButtonStyle = {
       height: '24px',
       padding: '0 8px',
@@ -72,35 +38,86 @@ window.__ModuleLoader__.load({
       fontSize: '12px',
       cursor: 'pointer',
     };
-    const preStyle = {
-      margin: '0',
-      overflow: 'auto',
-      whiteSpace: 'pre-wrap',
-      wordBreak: 'break-word',
-      fontFamily: 'var(--dsw-font-family-code, ui-monospace, SFMono-Regular, Consolas, monospace)',
-      fontSize: '12px',
-      lineHeight: '1.6',
-      color: 'var(--dsw-alias-label-primary)',
-    };
-    const errorStyle = {
-      ...preStyle,
-      color: 'var(--dsw-alias-state-error-primary)',
-    };
 
-    function MemoryAction(props) {
-      const sessionId = props.sessionId;
-      const [open, setOpen] = React.useState(false);
-      const [text, setText] = React.useState(null);
-      const [error, setError] = React.useState(null);
-      const [busy, setBusy] = React.useState(false);
+    let styleInstalled = false;
+    function installStyle() {
+      if (styleInstalled) return;
+      styleInstalled = true;
+      const style = document.createElement('style');
+      style.dataset.plugin = 'smriti-dsh';
+      style.textContent = [
+        'dialog[data-smriti-memory] { padding: 0; border: 0; background: transparent; }',
+        'dialog[data-smriti-memory]::backdrop { background: rgba(0, 0, 0, 0.32); }',
+      ].join('\n');
+      document.head.appendChild(style);
+    }
 
-      const load = React.useCallback(async () => {
+    function buildDialog(sessionId) {
+      installStyle();
+      const dialog = document.createElement('dialog');
+      dialog.dataset.smritiMemory = 'true';
+      dialog.setAttribute('aria-label', '记忆上下文');
+      dialog.style.width = 'min(720px, calc(100vw - 48px))';
+      dialog.style.maxHeight = 'calc(100vh - 48px)';
+
+      const panel = document.createElement('div');
+      panel.style.display = 'flex';
+      panel.style.flexDirection = 'column';
+      panel.style.gap = '12px';
+      panel.style.maxHeight = '72vh';
+      panel.style.padding = '16px';
+      panel.style.border = '1px solid var(--dsw-alias-border-l1)';
+      panel.style.borderRadius = '10px';
+      panel.style.background = 'var(--dsw-alias-bg-overlay)';
+      panel.style.color = 'var(--dsw-alias-label-primary)';
+      panel.style.boxShadow = '0 12px 40px rgba(0, 0, 0, 0.24)';
+
+      const header = document.createElement('div');
+      header.style.display = 'flex';
+      header.style.alignItems = 'center';
+      header.style.gap = '8px';
+      header.style.fontSize = '13px';
+
+      const title = document.createElement('strong');
+      title.textContent = '记忆上下文';
+      const status = document.createElement('span');
+      status.style.flex = '1';
+      status.style.fontSize = '12px';
+      status.style.color = 'var(--dsw-alias-label-secondary)';
+
+      const refresh = document.createElement('button');
+      refresh.type = 'button';
+      refresh.textContent = '刷新';
+      Object.assign(refresh.style, smallButtonStyle);
+
+      const close = document.createElement('button');
+      close.type = 'button';
+      close.textContent = '关闭';
+      Object.assign(close.style, smallButtonStyle);
+
+      const body = document.createElement('pre');
+      body.style.margin = '0';
+      body.style.overflow = 'auto';
+      body.style.whiteSpace = 'pre-wrap';
+      body.style.wordBreak = 'break-word';
+      body.style.fontFamily = 'var(--dsw-font-family-code, ui-monospace, SFMono-Regular, Consolas, monospace)';
+      body.style.fontSize = '12px';
+      body.style.lineHeight = '1.6';
+      body.style.color = 'var(--dsw-alias-label-primary)';
+
+      header.append(title, status, refresh, close);
+      panel.append(header, body);
+      dialog.append(panel);
+      document.body.appendChild(dialog);
+
+      const load = async () => {
         if (sessionId === undefined || sessionId === null) {
-          setError('没有会话标识');
+          status.textContent = '没有会话标识';
+          body.textContent = '';
           return;
         }
-        setBusy(true);
-        setError(null);
+        status.textContent = '加载中…';
+        refresh.disabled = true;
         try {
           const response = await fetch(
             '/plugins/smriti/context?session=' + encodeURIComponent(String(sessionId)),
@@ -108,60 +125,46 @@ window.__ModuleLoader__.load({
           );
           if (!response.ok) throw new Error('HTTP ' + response.status);
           const data = await response.json();
-          setText(typeof data.context === 'string' ? data.context : '');
+          const text = typeof data.context === 'string' ? data.context : '';
+          status.textContent = text.length === 0 ? '暂无召回' : '';
+          body.textContent = text.length === 0 ? '当前会话还没有召回记忆。' : text;
         } catch (failure) {
-          setError(failure && failure.message ? failure.message : String(failure));
+          status.textContent = '';
+          body.textContent = '读取失败：' + (failure && failure.message ? failure.message : String(failure));
         } finally {
-          setBusy(false);
+          refresh.disabled = false;
         }
-      }, [sessionId]);
-
-      const openPanel = () => {
-        setOpen(true);
-        void load();
       };
-      const close = () => setOpen(false);
 
-      const trigger = h('button', {
+      refresh.addEventListener('click', () => { void load(); });
+      close.addEventListener('click', () => dialog.close());
+      dialog.addEventListener('click', (event) => {
+        if (event.target === dialog) dialog.close();
+      });
+      dialog.addEventListener('close', () => {
+        body.textContent = '';
+        status.textContent = '';
+      });
+      dialog.smritiLoad = load;
+      return dialog;
+    }
+
+    function MemoryAction(props) {
+      const sessionId = props.sessionId;
+      const dialogRef = React.useRef(null);
+      const open = () => {
+        if (dialogRef.current === null) dialogRef.current = buildDialog(sessionId);
+        const dialog = dialogRef.current;
+        if (!dialog.open) dialog.showModal();
+        void dialog.smritiLoad();
+      };
+      return h('button', {
         type: 'button',
         title: '记忆上下文',
         'aria-label': '记忆上下文',
-        onClick: openPanel,
+        onClick: open,
         style: buttonStyle,
       }, '记忆');
-
-      if (!open) return trigger;
-
-      const panel = h('div', {
-        style: overlayStyle,
-        role: 'dialog',
-        'aria-modal': 'true',
-        'aria-label': '记忆上下文',
-        onClick: close,
-      }, h('div', {
-        style: panelStyle,
-        onClick: (event) => event.stopPropagation(),
-      },
-        h('div', { style: headerStyle },
-          h('strong', null, '记忆上下文'),
-          h('span', { style: hintStyle }, busy ? '加载中…' : ''),
-          h('button', {
-            type: 'button',
-            onClick: () => void load(),
-            style: smallButtonStyle,
-            disabled: busy,
-          }, '刷新'),
-          h('button', { type: 'button', onClick: close, style: smallButtonStyle }, '关闭'),
-        ),
-        error !== null
-          ? h('div', { style: errorStyle }, error)
-          : h('pre', { style: preStyle }, text === null ? '加载中…' : (text.length === 0 ? '当前会话还没有召回记忆。' : text)),
-      ));
-
-      const layer = ReactDOM !== undefined && typeof ReactDOM.createPortal === 'function'
-        ? ReactDOM.createPortal(panel, document.body)
-        : panel;
-      return h(React.Fragment, null, trigger, layer);
     }
 
     return {
