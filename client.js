@@ -152,6 +152,12 @@ window.__ModuleLoader__.load({
     function MemoryAction(props) {
       const sessionId = props.sessionId;
       const dialogRef = React.useRef(null);
+      React.useEffect(() => () => {
+        if (dialogRef.current !== null) {
+          dialogRef.current.remove();
+          dialogRef.current = null;
+        }
+      }, []);
       const open = () => {
         if (dialogRef.current === null) dialogRef.current = buildDialog(sessionId);
         const dialog = dialogRef.current;
