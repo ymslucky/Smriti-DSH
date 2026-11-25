@@ -10,7 +10,7 @@
 | 能力 | 触发点 | 行为 |
 |---|---|---|
 | 自动召回 | `agent/pre-step`（waterfall）+ `systemPrompt.context` | 取本步进批最后一条 user 文本查 `POST /v1/recall`，把 `<memory_context count="N">` 交给插件注册的 `smriti-memory` 上下文；Host 每步生成 runtime-context 快照，Chat 里默认折叠的「上下文」行（点开才展开），不是聊天气泡。同 `turn+step` 只查询一次，预算按 `recallMaxTokens × 4` 字符裁剪 |
-| 自动捕获 | `agent/turn-stopping`（serial） | 命中偏好句式才 `POST /v1/extract`；**不 await**，内部超时（默认 10s），每日上限计数。若捕获产生冲突/疑似重复，立即用 `userQuestions.ask` 弹出决策卡片（替换/保留），答案通过 `/v1/pending/{id}/resolve` 生效 |
+| 自动捕获 | `agent/turn-stopping`（serial） | 命中偏好句式才 `POST /v1/extract`；**不 await**，内部超时（默认 10s），每日上限计数。若捕获产生冲突/疑似重复，立即用 `userQuestions.ask` 弹出决策卡片（替换/保留/合并，合并需输入新陈述），答案通过 `/v1/pending/{id}/resolve` 生效 |
 | MCP 工具 | 插件激活时 | 用 `ctx.get('mcpManager').register('smriti', {transport:'streamable-http', url:'{base}/mcp', headers})` 注册，工具随插件加载/卸载自动挂载与撤销 |
 | `/memory` 命令 | `ctx.get('commands').register` | `review` / `approve` / `reject` / `context` / `search` / `save` / `forget` / `topics` |
 | 记忆面板 | Client `conversation.session.header.actions` | 标题旁「记忆」按钮打开浮层，读取 `GET /plugins/smriti/context?session=…`，展示当前会话最近一次注入的上下文；Host 只暴露这段文本 |

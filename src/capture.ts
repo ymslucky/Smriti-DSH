@@ -157,10 +157,14 @@ async function askResolveConflicts(
       question: isConflict
         ? `「${change.topic}」现在记录的是：${shortStatement(change.current?.statement ?? '')}。新捕获：${proposed}。如何处理？`
         : `「${change.topic}」已有相似记忆，新捕获：${proposed}。是否写入？`,
+      ...(isConflict
+        ? { detail: '选择“合并”时请输入合并后的陈述；不回答则保留 pending。' }
+        : {}),
       options: isConflict
         ? [
           { label: '替换', description: '用新记忆取代旧记忆，旧版进历史' },
           { label: '保留', description: '保留旧记忆，丢弃这次捕获' },
+          { label: '合并', description: '输入合并后的陈述（自定义答案）' },
         ]
         : [
           { label: '写入', description: '仍然写入这条新记忆' },
@@ -183,6 +187,23 @@ async function askResolveConflicts(
     if (change === undefined) continue
     const selected = item.selected[0]
     if (selected === undefined) continue
+    if (selected === '合并') {
+      const merged = item.custom?.trim() ?? ''
+      if (merged.length === 0) {
+        ctx.logger.warn('[smriti] 合并未提供文本，保留 pending：%s', change.changeId)
+        continue
+      }
+      try {
+        await client.resolve(change.changeId, 'merge', {
+          statement: merged,
+          reason: 'auto-capture conflict prompt',
+        })
+        ctx.logger.info(`[smriti] 冲突已裁决：${change.changeId} → merge`)
+      } catch (error: unknown) {
+        ctx.logger.warn('[smriti] 合并裁决失败，保留 pending：%s', String(error))
+      }
+      continue
+    }
     const decision = selected === '替换' || selected === '写入' ? 'replace' : 'keep'
     try {
       await client.resolve(change.changeId, decision, {

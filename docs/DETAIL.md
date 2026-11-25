@@ -144,9 +144,9 @@ ctx.get('mcpManager').register(config.mcpServerName, {
    `decision.messages` 分支），内容会被丢弃。
 6. **冲突决策弹窗**：自动捕获产生 `pending_review` 时，插件读取 `/v1/pending` 找到
    对应变更，用 `ctx.userQuestions.ask`（不传 `wait`，阻塞式问题卡片）让用户选择
-   「替换 / 保留」（疑似重复为「写入 / 放弃」），随后调用
+   「替换 / 保留 / 合并」；合并时取 `item.custom` 作为新陈述，随后调用
    `/v1/pending/{id}/resolve`。子会话（subagent）不允许人类交互，提问失败时保留
-   pending，不阻塞对话。
+   pending，不阻塞对话；用户不回答也保留 pending，可用 `/memory resolve` 手动裁决。
 7. **`/v1/recall` 的结果缓存**：按会话缓存“最近一次 query 的结果”；
    同 query 的下一步/重试直接复用，避免关键路径重复请求。
 8. **每日上限是进程内计数**，按本地日期重置；重启 dsh 会清零。
