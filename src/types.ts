@@ -247,6 +247,18 @@ export interface SystemPromptLike {
   }): Disposer
 }
 
+/** `ctx.get('webServer')` 的最小结构面（只读一条插件路由）。 */
+export interface WebServerLike {
+  register(route: {
+    kind: 'exact' | 'prefix'
+    path: string
+    resource: (
+      request: Request,
+      peer?: { principal?: { kind?: string } },
+    ) => Promise<Response>
+  }): Disposer
+}
+
 /** `credentials.resolve` 的返回。 */
 export interface ResolvedCredentialLike {
   value: string

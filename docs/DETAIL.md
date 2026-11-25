@@ -171,25 +171,33 @@ src/types.ts      本地结构化类型（配置、网关 DTO、Host 事件/服�
 src/config.ts     默认值、归一化、字符预算换算
 src/gateway.ts    GatewayClient：鉴权头、超时、REST 方法、最小 MCP tools/call
 src/mcp.ts        mcpManager 注册与去重
-src/recall.ts     pre-step 召回、<memory_context> 格式化、注入消息构造
-src/capture.ts    turn-stopping 启发式捕获、每日额度、异步提交
+src/recall.ts     pre-step 召回、<memory_context> 格式化、systemPrompt.context 供给
+src/capture.ts    turn-stopping 启发式捕获、每日额度、冲突提问与 resolve
 src/commands.ts   /memory 全部子命令
-src/index.ts      name / apply 组装
+src/index.ts      name / apply 组装、systemPrompt.context 与只读路由
+client.js         Client 半：标题栏「记忆」按钮 + 浮层（零构建）
 ```
 
-## 7. 验证记录
+## 7. Client 半与只读路由
+
+- Client 模块以 `window.__ModuleLoader__.load({ id:'smriti-dsh', factory })` 注册，`package.json.dsh.client` 声明 `platform: 'web'`、`immediately: true`、`inject` 会话 UI 包；无需打包器。
+- 按钮注册在 `conversation.session.header.actions`（session 作用域，标准 props 带 `sessionId`）；浮层用 `position: fixed`，有 `react-dom` 时用 `createPortal`，避免被标题栏 `overflow` 裁剪。
+- 数据来自 Host 的只读 `GET /plugins/smriti/context?session=…`：返回 `{session, context}`，其中 `context` 是 `runtime.lastContext(sessionId)`，不返回 Access token 或其他凭据；路由 `cache-control: no-store`，只允许同源/无 Sec-Fetch-Site 的请求，非 owner peer 返回 403。
+- 客户端模块图在页面加载时注入，所以首次安装或更新 `client.js` 后要刷新 Web GUI；`pnpm run dev:web` 同时运行时才走 HMR。
+
+
+## 8. 验证记录
 
 - `pnpm run build`（`tsc -p tsconfig.json`）→ 通过，生成 `lib/*.js`。
 - `node --check lib/index.js` → 通过。
 - 另用一次性 Node 脚本（放在系统临时目录，未进仓库）做了两轮动态验证：
-  1. **假网关端到端**：本地 HTTP 假网关 + 假 `ctx`（`mcpManager` / `commands`），
-     断言 pre-step 注入 `<memory_context count="1">`、同 `turn+step` 只注入一次、
-     续步空进批不注入、reject 原样返回且不注入、turn-stopping 立刻返回并在后台
-     完成 `/v1/extract`、`/memory` 七个分支的输出、无凭据时命令返回 `error` 而不抛异常、
-     MCP 注册 entry 的 URL/headers/超时正确。
-  2. **纯逻辑**：配置默认值与裁剪、`<memory_context>` 预算裁剪（2400 字符内、超长单条截断）、
-     偏好句式正反样例、每日额度跨日期重置、召回失败时决策不变、
-     `autoRecall=false && autoCapture=false` 时不注册监听器、仅捕获时只记录不注入、
-     空 `gatewayUrl` 时不生效。
-- **未做**：真实 profile 安装与真实网关联调（本机没有可用的 Smriti 部署，
-  且修改用户 profile 不在本任务文件范围内）。
+  1. **假网关端到端**：本地 HTTP 假网关 + 假 `ctx`（`systemPrompt` / `userQuestions` / `commands`），
+     断言 pre-step 不改消息、`systemPrompt.context` 的 provider 返回 `<memory_context>`、
+     冲突时调用 `userQuestions.ask` 且答案“替换”映射到 `/v1/pending/{id}/resolve` 的
+     `decision:'replace'`、`/memory context` 返回上下文。
+  2. **真实 profile**：本机桌面 profile 安装并启用 `include:smriti-dsh`；真实
+     `https://smriti.msxor.com` 召回成功，会话日志中出现
+     `source.kind:'runtime-context'`、`sections:[{name:'smriti-memory', text:'<memory_context …>'}]`
+     的快照；禁用插件后该段消失。
+- `/plugins/smriti/context` 本机请求返回 200（无召回时 `context:null`）；
+  `clientModules.clientPath('smriti-dsh')` 能解析到 `client.js`，但已有浏览器页面需要刷新一次。

@@ -12,7 +12,7 @@ import { resolveConfig } from './config.js'
 import { GatewayClient } from './gateway.js'
 import { registerMcp } from './mcp.js'
 import { installRecall, type RecallRuntime } from './recall.js'
-import type { CordisContextLike, SystemPromptLike } from './types.js'
+import type { CordisContextLike, SystemPromptLike, WebServerLike } from './types.js'
 
 /** 插件名（与 `cordis.patch.yml` 的行 id / 包名一致）。 */
 export const name = 'smriti-dsh'
@@ -68,6 +68,35 @@ export function apply(ctx: CordisContextLike, rawConfig?: unknown): void {
     }
   }
   registerCommands(ctx, config, client, runtime)
+  // 可选的 Client 半用它拉取当前会话的记忆上下文；只暴露这段文本，不暴露凭据。
+  const server = ctx.get('webServer') as WebServerLike | undefined
+  if (server !== undefined) {
+    const dispose = server.register({
+      kind: 'exact',
+      path: '/plugins/smriti/context',
+      resource: async (request, peer) => {
+        if (peer?.principal?.kind !== undefined && peer.principal.kind !== 'owner') {
+          return new Response(JSON.stringify({ error: 'forbidden' }), {
+            status: 403,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        const site = request.headers.get('sec-fetch-site')
+        if (site !== null && site !== 'same-origin' && site !== 'none') {
+          return new Response(JSON.stringify({ error: 'forbidden' }), {
+            status: 403,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        const sessionId = new URL(request.url).searchParams.get('session') ?? ''
+        const context = sessionId.length === 0 ? undefined : runtime.lastContext(sessionId)
+        return new Response(JSON.stringify({ session: sessionId, context: context ?? null }), {
+          headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
+        })
+      },
+    })
+    if (typeof ctx.effect === 'function') ctx.effect(() => dispose)
+  }
   void registerMcp(ctx, config, (ref) => client.resolveCredential(ref)).catch((error: unknown) => {
     ctx.logger.warn('[smriti] MCP 注册过程异常：%s', error instanceof Error ? error.message : String(error))
   })

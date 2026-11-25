@@ -3,9 +3,7 @@
 把 [Smriti](https://github.com/) Worker 网关的精炼记忆接进 DeepSeek Harness（dsh）：
 **自动召回**上下文、**自动捕获**偏好候选、暴露 `memory_*` MCP 工具，并带一个 `/memory` 人工命令。
 
-这是一个 **Host 插件 bundle**（`dsh.bundle.patch` → `cordis.patch.yml`），不提供 Web 界面。
-实现只依赖 `tsc` + `@types/node`，运行时不 import 任何 `@deepseek-ai/*` 包，
-Host 通过 `ctx` 注入全部能力（事件、`mcpManager`、`commands`、`credentials`）。
+这是一个 **Host + Client 双面 bundle**：Host 负责召回/捕获/命令/MCP，Client 负责会话标题旁的「记忆」按钮与上下文浮层。Host 运行时只依赖 `tsc` + `@types/node`，不 import 任何 `@deepseek-ai/*` 包；Client 半是零构建的 `client.js`（`window.__ModuleLoader__.load` 工厂）。
 
 ## 功能
 
@@ -14,7 +12,8 @@ Host 通过 `ctx` 注入全部能力（事件、`mcpManager`、`commands`、`cre
 | 自动召回 | `agent/pre-step`（waterfall）+ `systemPrompt.context` | 取本步进批最后一条 user 文本查 `POST /v1/recall`，把 `<memory_context count="N">` 交给插件注册的 `smriti-memory` 上下文；Host 每步生成 runtime-context 快照，Chat 里默认折叠的「上下文」行（点开才展开），不是聊天气泡。同 `turn+step` 只查询一次，预算按 `recallMaxTokens × 4` 字符裁剪 |
 | 自动捕获 | `agent/turn-stopping`（serial） | 命中偏好句式才 `POST /v1/extract`；**不 await**，内部超时（默认 10s），每日上限计数。若捕获产生冲突/疑似重复，立即用 `userQuestions.ask` 弹出决策卡片（替换/保留），答案通过 `/v1/pending/{id}/resolve` 生效 |
 | MCP 工具 | 插件激活时 | 用 `ctx.get('mcpManager').register('smriti', {transport:'streamable-http', url:'{base}/mcp', headers})` 注册，工具随插件加载/卸载自动挂载与撤销 |
-| `/memory` 命令 | `ctx.get('commands').register` | `review` / `approve` / `reject` / `search` / `save` / `forget` / `topics` |
+| `/memory` 命令 | `ctx.get('commands').register` | `review` / `approve` / `reject` / `context` / `search` / `save` / `forget` / `topics` |
+| 记忆面板 | Client `conversation.session.header.actions` | 标题旁「记忆」按钮打开浮层，读取 `GET /plugins/smriti/context?session=…`，展示当前会话最近一次注入的上下文；Host 只暴露这段文本 |
 
 召回内容示例（Host 生成的 runtime-context 快照）：
 
@@ -27,7 +26,7 @@ Host 通过 `ctx` 注入全部能力（事件、`mcpManager`、`commands`、`cre
 
 ## 安装
 
-先构建（仓库只提交源码，`lib/` 需要生成）：
+先构建（`lib/` 已提交，改源码后重新生成）：
 
 ```sh
 node <pnpm.mjs> install
@@ -43,6 +42,14 @@ npx -p @deepseek-ai/dsh dsh plugin --profile <profile> add <本仓库绝对路�
 或直接在 profile 的 `cordis.patch.yml` 里插入本插件行（行 id `smriti-dsh` 已由仓库自带的
 `cordis.patch.yml` 定义），然后重启该 profile。本仓库**未**自带 `prepare` 脚本，
 从 Git 安装时需要先自行构建 `lib/`，或改用路径安装。
+
+## 记忆面板（Client 半）
+
+- 首次安装或更新 `client.js` 后需要**刷新一次 Web GUI**：客户端模块图在页面加载时注入，热更新只在 `pnpm run dev:web` 同时运行时生效。
+- 按钮位于会话标题右侧（`conversation.session.header.actions`），点击后请求
+  `GET /plugins/smriti/context?session=<sessionId>`，显示当前会话最近一次召回全文。
+- Host 路由只返回 `{ session, context }`，不返回凭据；`context` 为空时面板显示“当前会话还没有召回记忆”。
+- 标题栏浮层被裁剪时用 `position: fixed`；有 `react-dom` 时走 portal。
 
 ## 配置
 
