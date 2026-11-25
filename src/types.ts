@@ -50,6 +50,8 @@ export interface PluginConfig {
 export interface RecallItem {
   id: string
   topic: string
+  /** 网关返回的中文展示名；旧网关可能不返回。 */
+  topicLabel?: string
   statement: string
 }
 

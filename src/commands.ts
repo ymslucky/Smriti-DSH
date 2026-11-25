@@ -77,7 +77,7 @@ function formatPending(items: readonly PendingChange[]): string {
 
 function formatRecall(items: readonly RecallItem[]): string {
   if (items.length === 0) return '没有命中记忆。'
-  return items.map((item) => `- [${item.topic}] ${item.statement}  (id=${item.id})`).join('\n')
+  return items.map((item) => `- [${item.topicLabel ?? item.topic}] ${item.statement}  (id=${item.id})`).join('\n')
 }
 
 function formatTopics(items: readonly TopicSummary[]): string {
@@ -85,8 +85,8 @@ function formatTopics(items: readonly TopicSummary[]): string {
   return items
     .map((item) => {
       const count = typeof item.count === 'number' ? ` ×${item.count}` : ''
-      const label = item.label !== undefined && item.label.length > 0 ? ` ${item.label}` : ''
-      return `- ${item.topic}${count}${label}`
+      const label = item.label !== undefined && item.label.length > 0 ? item.label : item.topic
+      return `- ${label}${count}  (${item.topic})`
     })
     .join('\n')
 }
