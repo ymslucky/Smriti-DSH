@@ -91,6 +91,7 @@ npx -p @deepseek-ai/dsh dsh plugin --profile <profile> add <本仓库绝对路�
 | `review` | 列出待裁决变更（现状 / 建议 / changeId） |
 | `approve <id>` | 批准一条待裁决变更 |
 | `reject <id> [reason]` | 拒绝一条待裁决变更（默认理由 `user rejected`） |
+| `resolve <id> replace\|keep\|merge [text]` | 直接裁决；`merge` 必须给出合并后的陈述 |
 | `context` | 查看当前会话最近一次注入的记忆上下文（注入行默认折叠时用它手动拉出） |
 | `search <query>` | 检索记忆（走 `/v1/recall`） |
 | `save <topic> <text>` | 显式保存一条偏好（走 MCP `memory_upsert`） |

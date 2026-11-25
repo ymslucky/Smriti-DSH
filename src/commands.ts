@@ -28,6 +28,7 @@ const USAGE = [
   'review                    列出待裁决变更',
   'approve <id>              批准一条待裁决变更',
   'reject <id> [reason]      拒绝一条待裁决变更',
+  'resolve <id> replace|keep|merge [merged text]  直接裁决一条待裁决变更',
   'context                   查看最近一次注入的记忆上下文',
   'search <query>            检索记忆',
   'save <topic> <text>       显式保存一条偏好',
@@ -155,6 +156,22 @@ export function registerCommands(
         const result = await client.reject(parsed.head, parsed.tail.length > 0 ? parsed.tail : 'user rejected')
         return { kind: 'success', text: `已提交拒绝：${statusText(result)}` }
       }
+      case 'resolve': {
+        const parsed = splitFirst(tail)
+        const rest = splitFirst(parsed.tail)
+        const decision = rest.head
+        if (parsed.head.length === 0 || (decision !== 'replace' && decision !== 'keep' && decision !== 'merge')) {
+          return { kind: 'error', text: '用法：/memory resolve <id> replace|keep|merge [merged text]' }
+        }
+        if (decision === 'merge' && rest.tail.length === 0) {
+          return { kind: 'error', text: 'merge 需要合并后的陈述：/memory resolve <id> merge <text>' }
+        }
+        const result = await client.resolve(parsed.head, decision, {
+          ...(decision === 'merge' ? { statement: rest.tail } : {}),
+          reason: 'user command',
+        })
+        return { kind: 'success', text: `已裁决 ${parsed.head} → ${decision}：${statusText(result)}` }
+      }
       case 'save': {
         const parsed = splitFirst(tail)
         if (parsed.head.length === 0 || parsed.tail.length === 0) {
@@ -191,7 +208,7 @@ export function registerCommands(
     commands.register({
       name: 'memory',
       description: 'Smriti 记忆：复核待裁决、检索、保存与遗忘偏好',
-      input: { hint: 'review | approve <id> | reject <id> [reason] | context | search <q> | save <topic> <text> | forget <topic> <id> [reason] | topics' },
+      input: { hint: 'review | approve <id> | reject <id> [reason] | resolve <id> replace|keep|merge [text] | context | search <q> | save <topic> <text> | forget <topic> <id> [reason] | topics' },
       handler: async (invocation): Promise<CommandResultLike> => {
         try {
           return await dispatch(invocation)
