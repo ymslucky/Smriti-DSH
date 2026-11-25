@@ -1,11 +1,14 @@
 /**
- * Smriti-DSH 的 Client 半：在会话标题旁放一个「记忆」按钮，点开原生 <dialog>
- * 展示当前会话最近一次注入的 `<memory_context>`。只读，不写入、不读其他插件 DOM。
+ * Smriti-DSH 的 Client 半：会话标题旁的「记忆」按钮。点开原生 <dialog>，分两页：
+ *  - 上下文：当前会话最近一次注入的 <memory_context>
+ *  - 状态与日志：插件运行状态、召回/捕获结果、跳过原因
  *
- * 用原生 dialog + showModal 而不是 React 浮层：标题栏有 overflow 裁剪，
- * dialog 的 top layer 不受影响，也不需要依赖 react-dom 的 createPortal。
+ * 数据来自 Host 的只读路由：
+ *   GET /plugins/smriti/context?session=…
+ *   GET /plugins/smriti/status?since=…&limit=…
  *
- * 数据来自 Host 的只读路由 `GET /plugins/smriti/context?session=…`。
+ * 用原生 dialog.showModal()：标题栏有 overflow 裁剪，dialog 的 top layer 不受影响，
+ * 也不需要 react-dom。
  */
 window.__ModuleLoader__.load({
   id: 'smriti-dsh',
@@ -39,6 +42,13 @@ window.__ModuleLoader__.load({
       cursor: 'pointer',
     };
 
+    const LEVEL_COLORS = {
+      debug: 'var(--dsw-alias-label-secondary)',
+      info: 'var(--dsw-alias-label-primary)',
+      warn: 'var(--dsw-alias-state-warn-primary)',
+      error: 'var(--dsw-alias-state-error-primary)',
+    };
+
     let styleInstalled = false;
     function installStyle() {
       if (styleInstalled) return;
@@ -48,76 +58,120 @@ window.__ModuleLoader__.load({
       style.textContent = [
         'dialog[data-smriti-memory] { padding: 0; border: 0; background: transparent; }',
         'dialog[data-smriti-memory]::backdrop { background: rgba(0, 0, 0, 0.32); }',
+        '.smriti-tab { border: 0; background: transparent; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 12px; padding: 4px 8px; border-radius: 6px; cursor: pointer; }',
+        '.smriti-tab[data-active="true"] { background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); }',
+        '.smriti-log { font-family: var(--dsw-font-family-code, ui-monospace, Consolas, monospace); font-size: 11px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }',
       ].join('\n');
       document.head.appendChild(style);
+    }
+
+    function element(tag, style, text) {
+      const node = document.createElement(tag);
+      if (style) Object.assign(node.style, style);
+      if (text !== undefined) node.textContent = text;
+      return node;
     }
 
     function buildDialog(sessionId) {
       installStyle();
       const dialog = document.createElement('dialog');
       dialog.dataset.smritiMemory = 'true';
-      dialog.setAttribute('aria-label', '记忆上下文');
-      dialog.style.width = 'min(720px, calc(100vw - 48px))';
+      dialog.setAttribute('aria-label', '记忆');
+      dialog.style.width = 'min(760px, calc(100vw - 48px))';
       dialog.style.maxHeight = 'calc(100vh - 48px)';
 
-      const panel = document.createElement('div');
-      panel.style.display = 'flex';
-      panel.style.flexDirection = 'column';
-      panel.style.gap = '12px';
-      panel.style.maxHeight = '72vh';
-      panel.style.padding = '16px';
-      panel.style.border = '1px solid var(--dsw-alias-border-l1)';
-      panel.style.borderRadius = '10px';
-      panel.style.background = 'var(--dsw-alias-bg-overlay)';
-      panel.style.color = 'var(--dsw-alias-label-primary)';
-      panel.style.boxShadow = '0 12px 40px rgba(0, 0, 0, 0.24)';
+      const panel = element('div', {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '10px',
+        maxHeight: '76vh',
+        padding: '16px',
+        border: '1px solid var(--dsw-alias-border-l1)',
+        borderRadius: '10px',
+        background: 'var(--dsw-alias-bg-overlay)',
+        color: 'var(--dsw-alias-label-primary)',
+        boxShadow: '0 12px 40px rgba(0, 0, 0, 0.24)',
+      });
 
-      const header = document.createElement('div');
-      header.style.display = 'flex';
-      header.style.alignItems = 'center';
-      header.style.gap = '8px';
-      header.style.fontSize = '13px';
-
-      const title = document.createElement('strong');
-      title.textContent = '记忆上下文';
-      const status = document.createElement('span');
-      status.style.flex = '1';
-      status.style.fontSize = '12px';
-      status.style.color = 'var(--dsw-alias-label-secondary)';
-
-      const refresh = document.createElement('button');
+      const header = element('div', {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '8px',
+        fontSize: '13px',
+      });
+      const title = element('strong', null, '记忆');
+      const stateLine = element('span', {
+        flex: '1',
+        fontSize: '11px',
+        color: 'var(--dsw-alias-label-secondary)',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+      });
+      const refresh = element('button', smallButtonStyle, '刷新');
       refresh.type = 'button';
-      refresh.textContent = '刷新';
-      Object.assign(refresh.style, smallButtonStyle);
-
-      const close = document.createElement('button');
+      const close = element('button', smallButtonStyle, '关闭');
       close.type = 'button';
-      close.textContent = '关闭';
-      Object.assign(close.style, smallButtonStyle);
+      header.append(title, stateLine, refresh, close);
 
-      const body = document.createElement('pre');
-      body.style.margin = '0';
-      body.style.overflow = 'auto';
-      body.style.whiteSpace = 'pre-wrap';
-      body.style.wordBreak = 'break-word';
-      body.style.fontFamily = 'var(--dsw-font-family-code, ui-monospace, SFMono-Regular, Consolas, monospace)';
-      body.style.fontSize = '12px';
-      body.style.lineHeight = '1.6';
-      body.style.color = 'var(--dsw-alias-label-primary)';
+      const tabs = element('div', { display: 'flex', gap: '4px' });
+      const tabContext = element('button', { padding: '4px 8px' }, '上下文');
+      const tabLogs = element('button', { padding: '4px 8px' }, '状态与日志');
+      for (const tab of [tabContext, tabLogs]) {
+        tab.type = 'button';
+        tab.className = 'smriti-tab';
+      }
+      tabs.append(tabContext, tabLogs);
 
-      header.append(title, status, refresh, close);
-      panel.append(header, body);
+      const contextView = element('pre', {
+        margin: '0',
+        overflow: 'auto',
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
+        fontFamily: 'var(--dsw-font-family-code, ui-monospace, Consolas, monospace)',
+        fontSize: '12px',
+        lineHeight: '1.6',
+        color: 'var(--dsw-alias-label-primary)',
+      });
+      contextView.textContent = '加载中…';
+
+      const logsView = element('div', {
+        display: 'none',
+        overflow: 'auto',
+        maxHeight: '52vh',
+        padding: '8px',
+        border: '1px solid var(--dsw-alias-border-l1)',
+        borderRadius: '8px',
+        background: 'var(--dsw-alias-bg-layer-1)',
+      });
+
+      const footer = element('div', {
+        fontSize: '11px',
+        color: 'var(--dsw-alias-label-secondary)',
+      });
+      footer.textContent = '状态每 2 秒自动刷新；日志只保留本进程最近 500 条。';
+
+      panel.append(header, tabs, contextView, logsView, footer);
       dialog.append(panel);
       document.body.appendChild(dialog);
 
-      const load = async () => {
+      let activeTab = 'context';
+      let lastSeq = 0;
+      let pollTimer = null;
+
+      const renderTab = () => {
+        contextView.style.display = activeTab === 'context' ? 'block' : 'none';
+        logsView.style.display = activeTab === 'logs' ? 'block' : 'none';
+        tabContext.dataset.active = String(activeTab === 'context');
+        tabLogs.dataset.active = String(activeTab === 'logs');
+      };
+
+      const loadContext = async () => {
+        contextView.textContent = '加载中…';
         if (sessionId === undefined || sessionId === null) {
-          status.textContent = '没有会话标识';
-          body.textContent = '';
+          contextView.textContent = '没有会话标识';
           return;
         }
-        status.textContent = '加载中…';
-        refresh.disabled = true;
         try {
           const response = await fetch(
             '/plugins/smriti/context?session=' + encodeURIComponent(String(sessionId)),
@@ -126,26 +180,87 @@ window.__ModuleLoader__.load({
           if (!response.ok) throw new Error('HTTP ' + response.status);
           const data = await response.json();
           const text = typeof data.context === 'string' ? data.context : '';
-          status.textContent = text.length === 0 ? '暂无召回' : '';
-          body.textContent = text.length === 0 ? '当前会话还没有召回记忆。' : text;
+          contextView.textContent = text.length === 0 ? '当前会话还没有召回记忆。' : text;
         } catch (failure) {
-          status.textContent = '';
-          body.textContent = '读取失败：' + (failure && failure.message ? failure.message : String(failure));
-        } finally {
-          refresh.disabled = false;
+          contextView.textContent = '读取失败：' + (failure && failure.message ? failure.message : String(failure));
         }
       };
 
-      refresh.addEventListener('click', () => { void load(); });
+      const appendLogs = (entries) => {
+        for (const entry of entries) {
+          const line = element('div', {
+            color: LEVEL_COLORS[entry.level] || LEVEL_COLORS.info,
+          });
+          const time = new Date(entry.time).toLocaleTimeString();
+          const detail = entry.detail === undefined ? '' : ' · ' + JSON.stringify(entry.detail);
+          line.textContent = `${time} [${entry.level}] [${entry.area}] ${entry.message}${detail}`;
+          line.className = 'smriti-log';
+          logsView.append(line);
+        }
+        while (logsView.childElementCount > 400) logsView.firstElementChild.remove();
+      };
+
+      const formatState = (state) => {
+        if (!state) return '';
+        const parts = [];
+        const daily = state.daily || {};
+        parts.push(`捕获 ${daily.count ?? 0}/${daily.limit ?? 0}`);
+        if (state.lastRecall) {
+          parts.push(state.lastRecall.error
+            ? `召回失败 ${state.lastRecall.ms}ms`
+            : `召回 ${state.lastRecall.items} 条/${state.lastRecall.ms}ms`);
+        }
+        if (state.lastCapture) {
+          parts.push(`捕获：${state.lastCapture.reason}`);
+        }
+        return parts.join(' · ');
+      };
+
+      const loadStatus = async (reset) => {
+        try {
+          const since = reset ? 0 : lastSeq;
+          const response = await fetch(
+            '/plugins/smriti/status?since=' + encodeURIComponent(String(since)) + '&limit=200',
+            { headers: { accept: 'application/json' } },
+          );
+          if (!response.ok) throw new Error('HTTP ' + response.status);
+          const data = await response.json();
+          lastSeq = typeof data.lastSeq === 'number' ? data.lastSeq : lastSeq;
+          if (reset) logsView.replaceChildren();
+          appendLogs(Array.isArray(data.logs) ? data.logs : []);
+          stateLine.textContent = formatState(data.state);
+        } catch (failure) {
+          stateLine.textContent = '状态读取失败：' + (failure && failure.message ? failure.message : String(failure));
+        }
+      };
+
+      const refreshAll = () => {
+        void loadContext();
+        void loadStatus(true);
+      };
+
+      tabContext.addEventListener('click', () => { activeTab = 'context'; renderTab(); });
+      tabLogs.addEventListener('click', () => { activeTab = 'logs'; renderTab(); });
+      refresh.addEventListener('click', refreshAll);
       close.addEventListener('click', () => dialog.close());
       dialog.addEventListener('click', (event) => {
         if (event.target === dialog) dialog.close();
       });
       dialog.addEventListener('close', () => {
-        body.textContent = '';
-        status.textContent = '';
+        if (pollTimer !== null) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
       });
-      dialog.smritiLoad = load;
+      dialog.smritiOpen = () => {
+        renderTab();
+        refreshAll();
+        if (pollTimer === null) {
+          pollTimer = setInterval(() => {
+            if (dialog.open) void loadStatus(false);
+          }, 2000);
+        }
+      };
       return dialog;
     }
 
@@ -162,12 +277,12 @@ window.__ModuleLoader__.load({
         if (dialogRef.current === null) dialogRef.current = buildDialog(sessionId);
         const dialog = dialogRef.current;
         if (!dialog.open) dialog.showModal();
-        void dialog.smritiLoad();
+        dialog.smritiOpen();
       };
       return h('button', {
         type: 'button',
-        title: '记忆上下文',
-        'aria-label': '记忆上下文',
+        title: '记忆',
+        'aria-label': '记忆',
         onClick: open,
         style: buttonStyle,
       }, '记忆');

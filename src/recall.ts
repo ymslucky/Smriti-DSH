@@ -12,6 +12,7 @@
 
 import { recallCharBudget } from './config.js'
 import { RECALL_TIMEOUT_MS, type GatewayClient } from './gateway.js'
+import { truncateText, type Telemetry } from './telemetry.js'
 import type {
   ContentBlockLike,
   CordisContextLike,
@@ -63,31 +64,25 @@ export function textOfUserMessage(message: UserMessageLike): string {
   return texts.join('\n').trim()
 }
 
-/** 框架注入的上下文来源，不应当被当成“用户这句话”。 */
-const NON_USER_SOURCES = new Set(['runtime-context', 'system-prompt', 'agent-instructions'])
-
 /**
  * 从本步进批的消息里取最后一条真正的用户输入。
  *
- * 优先选 `source.kind === 'user'`；否则取最后一条来源不是框架上下文的带文本消息
- * （子智能体的 prompt 等来源仍然算用户输入）。`runtime-context` 之类的注入消息
- * 既不参与召回，也不参与捕获。
+ * 只接受 `source.kind === 'user'`（或旧消息没有 source.kind）；子智能体报告、
+ * agent-message、user-question-reply、runtime-context 等都不算“用户这句话”，
+ * 避免拿子会话的汇报文本去召回/捕获。
  * @param messages - `agent/pre-step` 的 `messages`。
  * @returns 文本；没有可用文本时返回 `undefined`。
  */
 export function lastUserTextOf(messages: readonly UserMessageLike[]): string | undefined {
-  let fallback: string | undefined
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]
     if (message === undefined) continue
     const kind = message.source?.kind
-    if (kind !== undefined && NON_USER_SOURCES.has(kind)) continue
+    if (kind !== undefined && kind !== 'user') continue
     const text = textOfUserMessage(message)
-    if (text.length === 0) continue
-    if (kind === 'user') return text
-    if (fallback === undefined) fallback = text
+    if (text.length > 0) return text
   }
-  return fallback
+  return undefined
 }
 
 /**
@@ -143,6 +138,7 @@ export function installRecall(
   ctx: CordisContextLike,
   config: PluginConfig,
   client: GatewayClient,
+  telemetry: Telemetry,
 ): RecallRuntime {
   const texts = new Map<string, SessionText>()
   const contexts = new Map<string, string>()
@@ -158,14 +154,31 @@ export function installRecall(
     if (userText !== undefined) {
       texts.set(payload.agent.id, { turn: payload.turn, text: userText })
       trimToLimit(texts)
+      telemetry.log('debug', 'recall', 'pre-step 收到用户文本', {
+        turn: payload.turn,
+        step: payload.step,
+        text: truncateText(userText, 160),
+      })
     }
 
-    if (decision.kind === 'reject') return decision
-    if (!config.autoRecall) return decision
-    if (payload.signal.aborted) return decision
+    if (decision.kind === 'reject') {
+      if (userText !== undefined) telemetry.log('debug', 'recall', 'pre-step 被拒绝，跳过召回')
+      return decision
+    }
+    if (!config.autoRecall) {
+      if (userText !== undefined) telemetry.log('debug', 'recall', 'autoRecall=false，跳过召回')
+      return decision
+    }
+    if (payload.signal.aborted) {
+      if (userText !== undefined) telemetry.log('debug', 'recall', 'pre-step 已中止，跳过召回')
+      return decision
+    }
     if (userText === undefined) return decision
     // 空进批（工具续步等）不查询：没有新的用户文本。
-    if (decision.messages.length === 0) return decision
+    if (decision.messages.length === 0) {
+      telemetry.log('debug', 'recall', '空进批，跳过召回', { turn: payload.turn, step: payload.step })
+      return decision
+    }
 
     const sessionId = payload.agent.id
     const guard = injected.get(sessionId)
@@ -181,19 +194,44 @@ export function installRecall(
     const cached = recalled.get(sessionId)
     if (cached !== undefined && cached.query === userText) {
       items = cached.items
+      telemetry.log('debug', 'recall', `复用缓存：${items.length} 条`, { turn: payload.turn })
     } else {
+      const startedAt = Date.now()
       try {
+        telemetry.log('info', 'recall', '开始召回', {
+          turn: payload.turn,
+          query: truncateText(userText, 160),
+        })
         const response = await client.recall(userText, config.recallMaxResults, config.recallTimeoutMs ?? RECALL_TIMEOUT_MS)
         items = response.items
+        const elapsed = Date.now() - startedAt
+        telemetry.recordRecall({
+          at: new Date().toISOString(),
+          query: truncateText(userText, 160),
+          items: items.length,
+          ms: elapsed,
+        })
+        telemetry.log('info', 'recall', `召回完成：${items.length} 条 / ${elapsed}ms`, {
+          turn: payload.turn,
+          topics: items.map((item) => item.topic),
+        })
         recalled.set(sessionId, { query: userText, items })
         trimToLimit(recalled)
       } catch (error: unknown) {
         latest = undefined
         contexts.delete(sessionId)
-        ctx.logger.debug(
-          '[smriti] 召回失败（按无记忆继续）：%s',
-          error instanceof Error ? error.message : String(error),
-        )
+        const message = error instanceof Error ? error.message : String(error)
+        telemetry.recordRecall({
+          at: new Date().toISOString(),
+          query: truncateText(userText, 160),
+          items: 0,
+          ms: Date.now() - startedAt,
+          error: message,
+        })
+        telemetry.log('warn', 'recall', `召回失败：${message}`, {
+          turn: payload.turn,
+          query: truncateText(userText, 160),
+        })
         return decision
       }
     }
@@ -203,13 +241,14 @@ export function installRecall(
     if (text === undefined) {
       latest = undefined
       contexts.delete(sessionId)
+      telemetry.log('info', 'recall', '召回无命中，清空上下文', { turn: payload.turn })
       return decision
     }
     contexts.set(sessionId, text)
     trimToLimit(contexts)
     latest = text
     const injectedCount = /count="(\d+)"/.exec(text)?.[1] ?? '0'
-    ctx.logger.debug(`[smriti] 召回记忆 ${injectedCount} 条（turn ${payload.turn} step ${payload.step}）`)
+    telemetry.log('info', 'recall', `写入上下文：${injectedCount} 条（turn ${payload.turn} step ${payload.step}）`)
     // 不修改 decision.messages：由 systemPrompt.context 负责把 latest 变成
     // 本轮 runtime-context 快照，Chat 里默认折叠显示。
     return decision

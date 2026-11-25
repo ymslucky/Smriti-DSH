@@ -174,19 +174,35 @@ src/mcp.ts        mcpManager 注册与去重
 src/recall.ts     pre-step 召回、<memory_context> 格式化、systemPrompt.context 供给
 src/capture.ts    turn-stopping 启发式捕获、每日额度、冲突提问与 resolve
 src/commands.ts   /memory 全部子命令
+src/telemetry.ts  环形日志 + 最近一次召回/捕获状态
 src/index.ts      name / apply 组装、systemPrompt.context 与只读路由
-client.js         Client 半：标题栏「记忆」按钮 + 浮层（零构建）
+client.js         Client 半：标题栏「记忆」按钮 + 上下文/日志浮层（零构建）
 ```
 
 ## 7. Client 半与只读路由
 
 - Client 模块以 `window.__ModuleLoader__.load({ id:'smriti-dsh', factory })` 注册，`package.json.dsh.client` 声明 `platform: 'web'`、`immediately: true`、`inject` 会话 UI 包；无需打包器。
 - 按钮注册在 `conversation.session.header.actions`（session 作用域，标准 props 带 `sessionId`）；面板用原生 `<dialog>.showModal()` 的 top layer，避免标题栏 `overflow` 裁剪，也不依赖 `react-dom`。
-- 数据来自 Host 的只读 `GET /plugins/smriti/context?session=…`：返回 `{session, context}`，其中 `context` 是 `runtime.lastContext(sessionId)`，不返回 Access token 或其他凭据；路由 `cache-control: no-store`，只允许同源/无 Sec-Fetch-Site 的请求，非 owner peer 返回 403。
+- 数据来自 Host 的只读路由：`GET /plugins/smriti/context?session=…` 返回 `{session, context}`；
+  `GET /plugins/smriti/status?since=…&limit=…` 返回 `{state, logs, lastSeq}`。
+  两条路由 `cache-control: no-store`，只允许同源/无 Sec-Fetch-Site 的请求，非 owner peer 返回 403，不返回 Access token 或其他凭据。
 - 客户端模块图在页面加载时注入，所以首次安装或更新 `client.js` 后要刷新 Web GUI；`pnpm run dev:web` 同时运行时才走 HMR。
 
+## 8. 可观测性
 
-## 8. 验证记录
+- `Telemetry` 在进程内保留最近 500 条日志，并维护 `state`：启动配置、能力探测、每日捕获额度、
+  最近一次召回（条数/耗时/错误）、最近一次捕获（命中/跳过原因/结果）。
+- 记录点：插件启动、能力缺失、MCP 注册、pre-step 用户文本与召回开始/完成/失败、
+  turn-stopping 的跳过原因（无用户文本 / 未命中句式 / 重复 / 超限 / 提取失败）、
+  提取结果、冲突提问与 resolve 结果、`/memory` 命令调用。
+- 只接受 `source.kind === 'user'` 的文本参与召回/捕获；子智能体报告、agent-message、
+  user-question-reply、runtime-context 都排除，避免拿汇报文本触发召回/捕获。
+- 冲突提问前必须用 `ctx.get('agents').get(agent.id)` 换成 live Agent；直接传
+  `agent/turn-stopping` 里的快照会得到
+  `UserQuestionError: human interaction requires the exact live calling agent`。
+- `captureMode: 'always'` 可绕过句式启发式，把每回合文本交给 `/v1/extract`（仍受每日上限）。
+
+## 9. 验证记录
 
 - `pnpm run build`（`tsc -p tsconfig.json`）→ 通过，生成 `lib/*.js`。
 - `node --check lib/index.js` → 通过。
@@ -200,4 +216,11 @@ client.js         Client 半：标题栏「记忆」按钮 + 浮层（零构建�
      `source.kind:'runtime-context'`、`sections:[{name:'smriti-memory', text:'<memory_context …>'}]`
      的快照；禁用插件后该段消失。
 - `/plugins/smriti/context` 本机请求返回 200（无召回时 `context:null`）；
+  `/plugins/smriti/status` 返回启动/召回/捕获日志与 `state.config`、`state.capabilities`；
   `clientModules.clientPath('smriti-dsh')` 能解析到 `client.js`，但已有浏览器页面需要刷新一次。
+- 一次真实子会话回流的日志暴露了两个问题，均已修复：
+  1. 拿子会话汇报文本去召回/捕获（现在只认 `source.kind === 'user'`）；
+  2. 冲突提问用了 turn-stopping 的 Agent 快照，报 “requires the exact live calling agent”
+     （现在经 `agents.get` 换成 live Agent）。
+- 冒烟产生的 pending 已用 `keep` 清理，测试写入的 `tooling.package-manager` 已 `memory_forget`；
+  当前 `pending=0`、主题仅 `identity.role×1`。

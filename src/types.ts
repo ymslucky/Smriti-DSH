@@ -28,6 +28,8 @@ export interface PluginConfig {
   captureDailyLimit: number
   /** 自动捕获写入 / `/memory save` 时的最低置信度。 */
   captureMinConfidence: number
+  /** `heuristic` 只捕获偏好句式；`always` 每回合都交给 /v1/extract 判断。 */
+  captureMode?: 'heuristic' | 'always'
   /** 召回请求的超时（毫秒）；本机到网关的 AI Search 首字节约 5s，默认 8s。 */
   recallTimeoutMs: number
   /** 自动捕获请求的超时（毫秒）；后台任务，默认 10s。 */

@@ -13,7 +13,8 @@
 | 自动捕获 | `agent/turn-stopping`（serial） | 命中偏好句式才 `POST /v1/extract`；**不 await**，内部超时（默认 10s），每日上限计数。若捕获产生冲突/疑似重复，立即用 `userQuestions.ask` 弹出决策卡片（替换/保留/合并，合并需输入新陈述），答案通过 `/v1/pending/{id}/resolve` 生效 |
 | MCP 工具 | 插件激活时 | 用 `ctx.get('mcpManager').register('smriti', {transport:'streamable-http', url:'{base}/mcp', headers})` 注册，工具随插件加载/卸载自动挂载与撤销 |
 | `/memory` 命令 | `ctx.get('commands').register` | `review` / `approve` / `reject` / `context` / `search` / `save` / `forget` / `topics` |
-| 记忆面板 | Client `conversation.session.header.actions` | 标题旁「记忆」按钮打开浮层，读取 `GET /plugins/smriti/context?session=…`，展示当前会话最近一次注入的上下文；Host 只暴露这段文本 |
+| 记忆面板 | Client `conversation.session.header.actions` | 标题旁「记忆」按钮打开浮层：上下文 / 状态与日志两页；日志来自 Host 进程内环形缓冲 |
+| 运行日志 | Host `Telemetry` + 只读 `/plugins/smriti/status` | 记录启动、召回耗时/条数、捕获命中与跳过原因、每日额度、冲突提问与 resolve、错误；最近 500 条，不落盘 |
 
 召回内容示例（Host 生成的 runtime-context 快照）：
 
@@ -47,9 +48,10 @@ npx -p @deepseek-ai/dsh dsh plugin --profile <profile> add <本仓库绝对路�
 
 - 面板用原生 `<dialog>.showModal()` 的 top layer，避免标题栏 `overflow` 裁剪；不依赖 `react-dom` portal。
 - 首次安装或更新 `client.js` 后需要**刷新一次 Web GUI**：客户端模块图在页面加载时注入，热更新只在 `pnpm run dev:web` 同时运行时生效。
-- 按钮位于会话标题右侧（`conversation.session.header.actions`），点击后请求
-  `GET /plugins/smriti/context?session=<sessionId>`，显示当前会话最近一次召回全文。
-- Host 路由只返回 `{ session, context }`，不返回凭据；`context` 为空时面板显示“当前会话还没有召回记忆”。
+- 按钮位于会话标题右侧（`conversation.session.header.actions`），弹窗分「上下文」「状态与日志」两页：
+  - 上下文：`GET /plugins/smriti/context?session=<sessionId>`，显示最近一次召回全文；
+  - 状态与日志：`GET /plugins/smriti/status?since=<seq>&limit=<n>`，展示召回/捕获结果、跳过原因、错误与每日额度，打开时每 2 秒自动刷新。
+- Host 路由只返回上下文、状态和进程内最近 500 条日志，不返回凭据。
 - 标题栏浮层被裁剪时用原生 `<dialog>` 的 top layer，不依赖 `react-dom`。
 
 ## 配置
@@ -66,6 +68,7 @@ npx -p @deepseek-ai/dsh dsh plugin --profile <profile> add <本仓库绝对路�
 | `recallMaxTokens` | `600` | 注入预算（×4 字符），0 表示关闭注入 |
 | `captureDailyLimit` | `20` | 每日自动捕获次数上限（按本地日期，进程内计数） |
 | `captureMinConfidence` | `0.7` | 最低置信度：用于捕获结果过滤与 `/memory save` 的默认置信度 |
+| `captureMode` | `heuristic` | `heuristic` 只捕获偏好句式；`always` 每回合都交给 `/v1/extract` 判断（仍受每日上限约束） |
 | `recallTimeoutMs` | `8000` | 召回超时；本机到网关的 AI Search 首字节实测约 5s |
 | `captureTimeoutMs` | `10000` | 自动捕获超时（后台请求） |
 | `accessClientId` | 空 | Access service token 的 client id；配置后优先于 credentials/env |
@@ -94,6 +97,7 @@ npx -p @deepseek-ai/dsh dsh plugin --profile <profile> add <本仓库绝对路�
 | `reject <id> [reason]` | 拒绝一条待裁决变更（默认理由 `user rejected`） |
 | `resolve <id> replace\|keep\|merge [text]` | 直接裁决；`merge` 必须给出合并后的陈述 |
 | `context` | 查看当前会话最近一次注入的记忆上下文（注入行默认折叠时用它手动拉出） |
+| `capture <text>` | 手动跑一次自动捕获，便于诊断 `/v1/extract` 是否正常 |
 | `search <query>` | 检索记忆（走 `/v1/recall`） |
 | `save <topic> <text>` | 显式保存一条偏好（走 MCP `memory_upsert`） |
 | `forget <topic> <id> [reason]` | 遗忘一条偏好（走 MCP `memory_forget`） |

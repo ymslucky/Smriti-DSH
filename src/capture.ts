@@ -9,6 +9,7 @@
 
 import { createHash } from 'node:crypto'
 import { CAPTURE_TIMEOUT_MS, DEFAULT_REQUEST_TIMEOUT_MS, type GatewayClient } from './gateway.js'
+import { truncateText, type Telemetry } from './telemetry.js'
 import type {
   CordisContextLike,
   ExtractResponse,
@@ -18,12 +19,17 @@ import type {
 } from './types.js'
 import type { RecallRuntime } from './recall.js'
 
-/** 偏好句式启发式：中文四类 + 英文四类。 */
+/** 偏好句式启发式：中文六类 + 英文四类。 */
 export const PREFERENCE_PATTERNS: readonly RegExp[] = [
   /习惯/,
-  /以后都/,
+  /以后/,
   /统一/,
   /不要再/,
+  /不要用|别用|改用|换成/,
+  /记住|记一下|记下/,
+  /我们(?:都|一般|通常)/,
+  /我(?:一般|通常|习惯|默认)/,
+  /规范|约定|风格/,
   /\bprefer(?:s|red|ence|ences)?\b/i,
   /\balways\b/i,
   /\bnever\b/i,
@@ -86,7 +92,7 @@ function digestOf(text: string): string {
   return createHash('sha1').update(text).digest('hex').slice(0, 16)
 }
 
-function summarizeExtract(response: ExtractResponse, minConfidence: number): string {
+export function summarizeExtract(response: ExtractResponse, minConfidence: number): string {
   const candidates = response.candidates ?? []
   const results = response.results ?? []
   const confident = candidates.filter((candidate) => (candidate.confidence ?? 0) >= minConfidence)
@@ -123,6 +129,7 @@ async function askResolveConflicts(
   agent: { id: string },
   response: ExtractResponse,
   timeoutMs: number,
+  telemetry: Telemetry,
 ): Promise<void> {
   const ids = new Set<string>()
   for (const result of response.results ?? []) {
@@ -134,7 +141,7 @@ async function askResolveConflicts(
 
   const service = ctx.get('userQuestions') as UserQuestionsLike | undefined
   if (service === undefined) {
-    ctx.logger.debug('[smriti] userQuestions 不可用，冲突保留在待裁决队列')
+    telemetry.log('warn', 'capture', 'userQuestions 不可用，冲突保留 pending', { ids: [...ids] })
     return
   }
 
@@ -142,11 +149,17 @@ async function askResolveConflicts(
   try {
     pending = (await client.pending(timeoutMs)).items
   } catch (error: unknown) {
-    ctx.logger.debug('[smriti] 读取 pending 失败，冲突保留：%s', String(error))
+    telemetry.log('warn', 'capture', `读取 pending 失败：${String(error)}`)
     return
   }
   const changes = pending.filter((change) => ids.has(change.changeId)).slice(0, 3)
-  if (changes.length === 0) return
+  if (changes.length === 0) {
+    telemetry.log('info', 'capture', '未在 pending 中找到本次变更（可能已被自动处理）', { ids: [...ids] })
+    return
+  }
+  telemetry.log('info', 'capture', `准备冲突提问：${changes.length} 条`, {
+    changes: changes.map((change) => ({ id: change.changeId, topic: change.topic, current: change.current !== null })),
+  })
 
   const questions = changes.map((change) => {
     const isConflict = change.current !== null
@@ -175,10 +188,22 @@ async function askResolveConflicts(
 
   let answer
   try {
-    answer = await service.ask({ agent, questions })
+    // turn-stopping 里拿到的是 Agent 快照；userQuestions 要求 registry 里的
+    // “exact live instance”，否则会报 human interaction requires the exact live
+    // calling agent。先经 agents.get 换成 live root。
+    const agents = ctx.get('agents') as
+      | { get?: (id: string) => { id: string } | undefined }
+      | undefined
+    const liveAgent = agents?.get?.(agent.id) ?? agent
+    telemetry.log('info', 'capture', '等待用户裁决冲突', {
+      agent: agent.id,
+      live: liveAgent !== agent,
+    })
+    answer = await service.ask({ agent: liveAgent, questions })
+    telemetry.log('info', 'capture', '收到冲突裁决', { answers: answer.answers })
   } catch (error: unknown) {
     // 子会话、会话已关闭、没有 UI answerer 等：保持 pending，不阻塞回答。
-    ctx.logger.warn('[smriti] 冲突决策弹窗不可用，保留 pending：%s', String(error))
+    telemetry.log('warn', 'capture', `冲突决策弹窗不可用，保留 pending：${String(error)}`)
     return
   }
 
@@ -190,7 +215,7 @@ async function askResolveConflicts(
     if (selected === '合并') {
       const merged = item.custom?.trim() ?? ''
       if (merged.length === 0) {
-        ctx.logger.warn('[smriti] 合并未提供文本，保留 pending：%s', change.changeId)
+        telemetry.log('warn', 'capture', `合并未提供文本，保留 pending：${change.changeId}`)
         continue
       }
       try {
@@ -198,9 +223,9 @@ async function askResolveConflicts(
           statement: merged,
           reason: 'auto-capture conflict prompt',
         })
-        ctx.logger.info(`[smriti] 冲突已裁决：${change.changeId} → merge`)
+        telemetry.log('info', 'capture', `冲突已裁决：${change.changeId} → merge`)
       } catch (error: unknown) {
-        ctx.logger.warn('[smriti] 合并裁决失败，保留 pending：%s', String(error))
+        telemetry.log('warn', 'capture', `合并裁决失败，保留 pending：${String(error)}`)
       }
       continue
     }
@@ -209,9 +234,9 @@ async function askResolveConflicts(
       await client.resolve(change.changeId, decision, {
         reason: 'auto-capture conflict prompt',
       })
-      ctx.logger.info(`[smriti] 冲突已裁决：${change.changeId} → ${decision}`)
+      telemetry.log('info', 'capture', `冲突已裁决：${change.changeId} → ${decision}`)
     } catch (error: unknown) {
-      ctx.logger.warn('[smriti] 冲突裁决失败，保留 pending：%s', String(error))
+      telemetry.log('warn', 'capture', `冲突裁决失败，保留 pending：${String(error)}`)
     }
   }
 }
@@ -228,24 +253,77 @@ export function installCapture(
   config: PluginConfig,
   client: GatewayClient,
   runtime: RecallRuntime,
+  telemetry: Telemetry,
 ): void {
   const counter: DailyCounter = { day: '', count: 0 }
   const seen = new Set<string>()
+  telemetry.state.daily.limit = config.captureDailyLimit
 
   ctx.on('agent/turn-stopping', (payload) => {
-    if (!config.autoCapture) return
-    if (payload.signal.aborted) return
-    const record = runtime.lastUserText(payload.agent.id)
-    // 只看属于本回合的文本，避免复用上一回合的残留。
-    if (record === undefined || record.turn !== payload.turn) return
-    const text = record.text.trim()
-    if (!looksLikePreference(text)) return
-    const digest = digestOf(text)
-    if (seen.has(digest)) return
-    if (!takeDailySlot(counter, config.captureDailyLimit, new Date())) {
-      ctx.logger.debug('[smriti] 已达每日自动捕获上限，跳过本回合')
+    if (!config.autoCapture) {
+      telemetry.log('debug', 'capture', 'autoCapture=false，跳过')
       return
     }
+    if (payload.signal.aborted) {
+      telemetry.log('debug', 'capture', 'turn-stopping 已中止，跳过')
+      return
+    }
+    const record = runtime.lastUserText(payload.agent.id)
+    // 只看属于本回合的文本，避免复用上一回合的残留。
+    if (record === undefined || record.turn !== payload.turn) {
+      telemetry.log('debug', 'capture', '跳过：没有本回合的用户文本', {
+        turn: payload.turn,
+        recordTurn: record?.turn ?? null,
+      })
+      return
+    }
+    const text = record.text.trim()
+    const textPreview = truncateText(text, 200)
+    const matched = config.captureMode === 'always' || looksLikePreference(text)
+    if (!matched) {
+      telemetry.recordCapture({
+        at: new Date().toISOString(),
+        turn: payload.turn,
+        text: textPreview,
+        matched: false,
+        reason: '未命中偏好句式（captureMode=heuristic）',
+      })
+      telemetry.log('debug', 'capture', '未命中偏好句式，跳过', {
+        turn: payload.turn,
+        captureMode: config.captureMode ?? 'heuristic',
+        text: textPreview,
+      })
+      return
+    }
+    const digest = digestOf(text)
+    if (seen.has(digest)) {
+      telemetry.recordCapture({
+        at: new Date().toISOString(),
+        turn: payload.turn,
+        text: textPreview,
+        matched: true,
+        reason: '重复文本，已跳过',
+      })
+      telemetry.log('debug', 'capture', '重复文本，已跳过', { turn: payload.turn })
+      return
+    }
+    if (!takeDailySlot(counter, config.captureDailyLimit, new Date())) {
+      telemetry.setDaily(counter.day, counter.count, config.captureDailyLimit)
+      telemetry.recordCapture({
+        at: new Date().toISOString(),
+        turn: payload.turn,
+        text: textPreview,
+        matched: true,
+        reason: '已达每日自动捕获上限',
+      })
+      telemetry.log('warn', 'capture', '已达每日自动捕获上限，跳过本回合', {
+        day: counter.day,
+        count: counter.count,
+        limit: config.captureDailyLimit,
+      })
+      return
+    }
+    telemetry.setDaily(counter.day, counter.count, config.captureDailyLimit)
     seen.add(digest)
     while (seen.size > MAX_SEEN_DIGESTS) {
       const oldest = seen.values().next()
@@ -254,19 +332,53 @@ export function installCapture(
     }
 
     const sessionId = payload.agent.id
+    telemetry.recordCapture({
+      at: new Date().toISOString(),
+      turn: payload.turn,
+      text: textPreview,
+      matched: true,
+      reason: '开始提取',
+    })
+    telemetry.log('info', 'capture', '命中偏好句式，开始提取', {
+      turn: payload.turn,
+      text: textPreview,
+    })
     void (async (): Promise<void> => {
+      const startedAt = Date.now()
       try {
         const response = await client.extract({
           sessionId,
           messages: [{ role: 'user', content: text.slice(0, MAX_CAPTURE_CHARS) }],
         }, config.captureTimeoutMs ?? CAPTURE_TIMEOUT_MS)
-        ctx.logger.info(`[smriti] 自动捕获：${summarizeExtract(response, config.captureMinConfidence)}`)
-        await askResolveConflicts(ctx, client, payload.agent, response, DEFAULT_REQUEST_TIMEOUT_MS)
+        const summary = summarizeExtract(response, config.captureMinConfidence)
+        telemetry.recordCapture({
+          at: new Date().toISOString(),
+          turn: payload.turn,
+          text: textPreview,
+          matched: true,
+          reason: '提取完成',
+          status: summary,
+          ms: Date.now() - startedAt,
+        })
+        telemetry.log('info', 'capture', `提取完成：${summary}`, {
+          turn: payload.turn,
+          results: response.results,
+        })
+        await askResolveConflicts(ctx, client, payload.agent, response, DEFAULT_REQUEST_TIMEOUT_MS, telemetry)
       } catch (error: unknown) {
-        ctx.logger.warn(
-          '[smriti] 自动捕获失败（忽略）：%s',
-          error instanceof Error ? error.message : String(error),
-        )
+        const message = error instanceof Error ? error.message : String(error)
+        telemetry.recordCapture({
+          at: new Date().toISOString(),
+          turn: payload.turn,
+          text: textPreview,
+          matched: true,
+          reason: '提取失败',
+          error: message,
+          ms: Date.now() - startedAt,
+        })
+        telemetry.log('warn', 'capture', `自动捕获失败（忽略）：${message}`, {
+          turn: payload.turn,
+        })
       }
     })()
   })

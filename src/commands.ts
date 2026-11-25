@@ -22,6 +22,8 @@ import type {
   TopicSummary,
 } from './types.js'
 import type { RecallRuntime } from './recall.js'
+import { summarizeExtract } from './capture.js'
+import { truncateText, type Telemetry } from './telemetry.js'
 
 /** 命令体提示文本。 */
 const USAGE = [
@@ -30,6 +32,7 @@ const USAGE = [
   'reject <id> [reason]      拒绝一条待裁决变更',
   'resolve <id> replace|keep|merge [merged text]  直接裁决一条待裁决变更',
   'context                   查看最近一次注入的记忆上下文',
+  'capture <text>            手动跑一次自动捕获（便于诊断）',
   'search <query>            检索记忆',
   'save <topic> <text>       显式保存一条偏好',
   'forget <topic> <id> [reason]  遗忘一条偏好',
@@ -111,6 +114,7 @@ export function registerCommands(
   config: PluginConfig,
   client: GatewayClient,
   runtime: RecallRuntime,
+  telemetry: Telemetry,
 ): void {
   const commands = ctx.get('commands') as CommandsLike | undefined
   if (commands === undefined) {
@@ -121,6 +125,10 @@ export function registerCommands(
   const dispatch = async (invocation: CommandInvocationLike): Promise<CommandResultLike> => {
     const raw = invocation.rawInput.trim()
     const { head, tail } = splitFirst(raw)
+    telemetry.log('info', 'command', `执行 /memory ${head.length === 0 ? '(usage)' : head}`, {
+      agent: invocation.agent.id,
+      args: truncateText(tail, 200),
+    })
     switch (head) {
       case '': {
         return { kind: 'success', text: USAGE }
@@ -139,6 +147,19 @@ export function registerCommands(
           kind: 'success',
           text: context ?? '还没有注入记忆上下文（自动召回可能未触发，或本次没有命中）。',
         }
+      }
+      case 'capture': {
+        if (tail.length === 0) return { kind: 'error', text: '用法：/memory capture <text>' }
+        const response = await client.extract({
+          sessionId: invocation.agent.id,
+          messages: [{ role: 'user', content: tail }],
+        }, config.captureTimeoutMs ?? 10000)
+        const summary = summarizeExtract(response, config.captureMinConfidence)
+        telemetry.log('info', 'command', `手动捕获：${summary}`, {
+          agent: invocation.agent.id,
+          results: response.results,
+        })
+        return { kind: 'success', text: summary }
       }
       case 'search': {
         if (tail.length === 0) return { kind: 'error', text: '用法：/memory search <query>' }
@@ -208,7 +229,7 @@ export function registerCommands(
     commands.register({
       name: 'memory',
       description: 'Smriti 记忆：复核待裁决、检索、保存与遗忘偏好',
-      input: { hint: 'review | approve <id> | reject <id> [reason] | resolve <id> replace|keep|merge [text] | context | search <q> | save <topic> <text> | forget <topic> <id> [reason] | topics' },
+      input: { hint: 'review | approve <id> | reject <id> [reason] | resolve <id> replace|keep|merge [text] | context | capture <text> | search <q> | save <topic> <text> | forget <topic> <id> [reason] | topics' },
       handler: async (invocation): Promise<CommandResultLike> => {
         try {
           return await dispatch(invocation)
