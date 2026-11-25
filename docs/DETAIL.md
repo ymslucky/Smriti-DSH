@@ -138,7 +138,8 @@ ctx.get('mcpManager').register(config.mcpServerName, {
    `systemPrompt.context({ name: 'smriti-memory' })`，Host 在每步装配时生成
    runtime-context 快照（`source.kind: 'runtime-context'`、`form: 'snapshot'`、
    `sections: [{ name: 'smriti-memory', text }]`），Chat 渲染成默认折叠的
-   上下文行（`ContextInjectionRow`），不是 user 气泡。注意：不要在 pre-step
+   上下文行（`ContextInjectionRow`），不是 user 气泡。上下文行用网关返回的
+   `topicLabel` 展示中文主题，旧网关没有该字段时才退回 `topic`。注意：不要在 pre-step
    里自行返回 `source.kind: 'runtime-context'` 的 UserMessage——agent loop 会把它
    替换成 Host 自己投影的 context（见 `dsh-agent-loop/src/agent.ts` 的
    `decision.messages` 分支），内容会被丢弃。

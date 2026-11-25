@@ -20,8 +20,8 @@
 
 ```text
 <memory_context count="2">
-- [tooling.package-manager] 统一用 pnpm，不要用 npm
-- [workflow.git] commit message 用中文，一次提交只做一件事
+- [包管理器] 统一用 pnpm，不要用 npm
+- [Git 流程] commit message 用中文，一次提交只做一件事
 </memory_context>
 ```
 
