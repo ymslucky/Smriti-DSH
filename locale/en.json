@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Smriti Memory (smriti-dsh)",
+    "description": "Auto-recall Smriti memories into dsh context, capture preference candidates at turn end, expose memory_* MCP tools, and add a /memory command for review, search, save and forget.",
+    "detail": "README.md"
+  }
+}

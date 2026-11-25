@@ -1,0 +1,10 @@
+- insert:
+    - id: smriti-dsh
+      name: smriti-dsh
+      config:
+        gatewayUrl: https://smriti.msxor.com
+        mcpServerName: smriti
+        autoRecall: true
+        autoCapture: true
+        # memory_* 工具已由 profile 里的 @local/smriti-mcp 提供，避免同名 MCP 重复注册。
+        exposeMcp: false

@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Smriti 记忆 (smriti-dsh)",
+    "description": "把 Smriti 记忆自动召回进 dsh 上下文，在回合结束时捕获偏好候选，暴露 memory_* MCP 工具，并提供 /memory 命令用于复核、检索、保存与遗忘。",
+    "detail": "README.md"
+  }
+}
